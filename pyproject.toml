@@ -1,9 +1,25 @@
 [project]
 name = "humor-rlhf"
 version = "0.1.0"
-description = "Add your description here"
+description = "GRPO-based RLHF for humor captioning with Gemma 4"
 readme = "README.md"
 requires-python = ">=3.12"
+# Minimum-version floors only, no upper bounds. Without floors, uv's
+# resolver walks backwards and picks ancient versions (e.g. vllm 0.2.5)
+# to satisfy competing constraints. Floors are set high enough that
+# Gemma 4 + TRL GRPO + vLLM all work together. The lockfile (uv.lock)
+# pins exact versions for reproducibility — pyproject.toml just prevents
+# regressions.
 dependencies = [
-    "verl>=0.7.1",
+    "torch>=2.8",
+    "transformers>=5.5",
+    "accelerate>=1.0",
+    "peft>=0.15",
+    "trl>=1.0",
+    "vllm>=0.18",
+    "bitsandbytes>=0.46",
+    "timm",
+    "datasets>=4.0",
+    "pillow",
+    "numpy",
 ]
