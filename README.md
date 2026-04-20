@@ -1,25 +1,27 @@
 # humor-rlhf
 
-## Setup
+## Setup (PACE)
 
-This project uses [uv](https://docs.astral.sh/uv/) for Python package and project management.
+Run the setup script once after cloning:
 
-1. Install uv (if you don't have it):
-   ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
+```bash
+bash scripts/setup.sh
+source ~/.bashrc
+```
 
-2. Sync the project (installs Python and dependencies):
-   ```bash
-   uv sync
-   ```
+This installs [uv](https://docs.astral.sh/uv/), creates scratch cache
+directories, adds the required environment variables to your `~/.bashrc`,
+and runs `uv sync` to install Python and project dependencies. It's safe
+to re-run.
 
-3. Run scripts:
-   ```bash
-   uv run python scripts/<script_name>.py
-   ```
+## Usage
 
-4. Add dependencies:
-   ```bash
-   uv add <package_name>
-   ```
+Run scripts:
+```bash
+uv run python scripts/<script_name>.py
+```
+
+Add dependencies:
+```bash
+uv add <package_name>
+```
