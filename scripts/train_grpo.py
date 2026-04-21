@@ -35,8 +35,13 @@ from reward_stub import compute_score
 
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "google/gemma-4-E2B-it")
-MAX_SEQ_LENGTH = 4096
+MAX_SEQ_LENGTH = 1024
+# Rank choice per thinkingmachines.ai/blog/lora: RL absorbs ~1 bit/episode,
+# so even rank 1 matches FullFT. Pick 32 as a safety margin without
+# materially raising memory. Alpha stays fixed at 32 (not 2*rank) so the
+# PEFT scale = alpha/r becomes rank-invariant per the same post.
 LORA_RANK = 32
+LORA_ALPHA = 32
 
 # TRL 0.29.1 officially supports vLLM 0.10–0.12, but Gemma 4 needs vLLM
 # >= 0.18. We install the newer vLLM and hope the API surface TRL uses is
@@ -79,13 +84,19 @@ def reward_stub(completions, **kwargs):
 
 
 def main():
+    # LoRA settings follow thinkingmachines.ai/blog/lora:
+    #   - target_modules="all-linear": attention-only LoRA underperforms
+    #     even at matched params; MLP/MoE layers must be adapted too.
+    #     Bonus: this matches the inner nn.Linear inside Gemma 4's
+    #     Gemma4ClippableLinear wrapper automatically.
+    #   - lora_alpha=32 fixed (not scaled with r) so the alpha/r scale
+    #     is rank-independent.
+    #   - PEFT default init (A ~ Kaiming, B = 0) matches the post's
+    #     recommendation.
     lora_config = LoraConfig(
         r=LORA_RANK,
-        lora_alpha=LORA_RANK * 2,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        lora_alpha=LORA_ALPHA,
+        target_modules="all-linear",
         bias="none",
         task_type="CAUSAL_LM",
     )
@@ -99,34 +110,56 @@ def main():
         output_dir=str(OUTPUT_DIR),
         # Model loading: TRL reads config.architectures[0] to pick the class.
         model_init_kwargs={"dtype": dtype},
-        # Optimizer & schedule (mirrors the Gemma 4 E2B notebook in docs/grpo.py).
+        # Enable Gemma 4's reasoning mode (off by default) so the policy
+        # can plan a format-correct caption before emitting tags.
+        chat_template_kwargs={"enable_thinking": True},
+        # Optimizer & schedule. LR ~10x a typical FullFT RL LR (~5e-6),
+        # per thinkingmachines.ai/blog/lora — LoRA tolerates and benefits
+        # from a higher LR than full fine-tuning.
         learning_rate=5e-5,
         weight_decay=0.001,
-        warmup_ratio=0.1,
-        lr_scheduler_type="linear",
+        lr_scheduler_type="constant",
         optim="adamw_8bit",
         bf16=use_bf16,
         fp16=not use_bf16,
         gradient_checkpointing=True,
         # GRPO-specific.
         temperature=1.0,
+        # Keep the effective batch modest: the LoRA post warns that LoRA
+        # pays a larger loss penalty than FullFT as batch size grows, and
+        # the penalty does not shrink with higher rank.
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=4,
         num_generations=4,
-        max_completion_length=MAX_SEQ_LENGTH - 512,
-        max_steps=20,
-        save_steps=20,
+        max_completion_length=256,
+        max_steps=200,
+        save_steps=200,
         logging_steps=1,
+        # KL penalty against the frozen reference adapter: keeps the
+        # policy from drifting onto degenerate low-reward modes (seen
+        # previously: dropped the literal "caption" entirely).
+        beta=0.04,
         epsilon=0.2,
         epsilon_high=0.28,
         delta=1.5,
-        loss_type="bnpo",
+        loss_type="cispo",
         mask_truncated_completions=True,
         # Fast rollouts: vLLM runs colocated on the same GPU as the trainer.
         use_vllm=USE_VLLM,
         vllm_mode="colocate",
-        vllm_gpu_memory_utilization=0.35,
-        report_to="none",
+        vllm_gpu_memory_utilization=0.45,
+        # Gemma 4's native context is 131k; vLLM tries to reserve KV
+        # cache for the full length and OOMs on 24GB. Cap to what we
+        # actually use (prompt + completion + slack).
+        vllm_max_model_length=1024,
+        report_to="wandb",
+        run_name=os.environ.get("WANDB_RUN_NAME", "gemma4-e2b-grpo-stub"),
+        logging_first_step=True,
+        # Rollout visibility: print a few completions per log step and
+        # push the full table to wandb so we can actually eyeball what
+        # the policy is generating.
+        log_completions=True,
+        num_completions_to_print=2,
     )
 
     trainer = GRPOTrainer(

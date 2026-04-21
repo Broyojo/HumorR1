@@ -22,4 +22,5 @@ dependencies = [
     "datasets>=4.0",
     "pillow",
     "numpy",
+    "wandb>=0.26.0",
 ]
