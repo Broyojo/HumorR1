@@ -205,6 +205,17 @@ def parse_args():
         default=os.environ.get("WANDB_RUN_NAME", "qwen3-vl-reward-model"),
         help="Run name for logging.",
     )
+    parser.add_argument(
+        "--lr-scheduler-type",
+        default="cosine",
+        help="LR scheduler (cosine|constant|linear|...).",
+    )
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help="Max gradient norm for clipping (default 1.0).",
+    )
     return parser.parse_args()
 
 
@@ -373,6 +384,12 @@ class Qwen3VLRewardModel(nn.Module):
 
         hidden_size = infer_hidden_size(self.backbone.config)
         self.score_head = nn.Linear(hidden_size, 1, bias=False)
+        # Zero-init: initial reward = 0 for everything, so BT loss starts at
+        # log(2) and gradient signal is purely about ranking. Default Kaiming
+        # init gave initial rewards ~50 in earlier runs and the optimizer
+        # spent the first many steps just rescaling the head.
+        with torch.no_grad():
+            self.score_head.weight.zero_()
 
         lora_config = LoraConfig(
             r=lora_r,
@@ -663,7 +680,8 @@ def main():
         run_name=args.run_name,
         dataloader_num_workers=4,
         gradient_checkpointing=False,
-        lr_scheduler_type="cosine",
+        lr_scheduler_type=args.lr_scheduler_type,
+        max_grad_norm=args.max_grad_norm,
         optim=optim_name,
         load_best_model_at_end=False,
         metric_for_best_model=None,
