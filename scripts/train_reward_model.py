@@ -216,6 +216,12 @@ def parse_args():
         default=1.0,
         help="Max gradient norm for clipping (default 1.0).",
     )
+    parser.add_argument(
+        "--image-max-side",
+        type=int,
+        default=448,
+        help="Resize cartoons so the long edge is this many px before processing.",
+    )
     return parser.parse_args()
 
 
@@ -305,12 +311,21 @@ class PreferenceCollator:
     data_root: Path
     max_length: int
     text_budget: int = 160
+    image_max_side: int = 448
 
     def _load_image(self, image_path: str) -> Image.Image:
         path = Path(image_path)
         if not path.is_absolute():
             path = self.data_root / path
-        return Image.open(path).convert("RGB")
+        img = Image.open(path).convert("RGB")
+        # Resize so the long edge is `image_max_side`. The Qwen2.5-VL
+        # processor emits ~1 image token per (28*28) pixel patch; without
+        # this knock-down a 600x500 cartoon expands to ~750 image tokens.
+        # Capping the long edge at 448 brings it to ~256 tokens — cuts
+        # forward time in roughly half on a 3B VLM.
+        if max(img.size) > self.image_max_side:
+            img.thumbnail((self.image_max_side, self.image_max_side), Image.LANCZOS)
+        return img
 
     def _truncate_text_segment(self, text: str, max_tokens: int) -> str:
         tokenizer = getattr(self.processor, "tokenizer", None)
@@ -692,6 +707,7 @@ def main():
         processor=processor,
         data_root=args.data_root,
         max_length=args.max_length,
+        image_max_side=args.image_max_side,
     )
 
     trainer = RewardTrainer(
