@@ -51,27 +51,24 @@ POLICY_MODEL_NAME = os.environ.get("POLICY_MODEL_NAME", "Qwen/Qwen3-VL-2B-Thinki
 REWARD_MODEL_DIR = Path(
     os.environ.get(
         "REWARD_MODEL_DIR",
-        str(Path.home() / "scratch/humor-r1/final_reward_model"),
+        str(PROJECT_ROOT / "checkpoints/rm-baseline-20k-fa2/final_reward_model"),
     )
 )
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", str(PROJECT_ROOT / "data")))
 TRAIN_DATA_DIR = DATA_ROOT / "caption_sft_train"
 
 CKPT_ROOT = Path(
-    os.environ.get("CKPT_ROOT", str(Path.home() / "scratch/humor-r1/checkpoints"))
+    os.environ.get("CKPT_ROOT", str(PROJECT_ROOT / "checkpoints"))
 )
 OUTPUT_DIR = CKPT_ROOT / "qwen3vl-2b-grpo-newyorker"
 
-REWARD_GPU = int(os.environ.get("REWARD_GPU", "1"))  # second visible A100
+# Single-A100 setup: RM colocates with the policy on GPU 0. Override
+# REWARD_GPU=1 if you have a second card.
+REWARD_GPU = int(os.environ.get("REWARD_GPU", "0"))
 USE_VLLM = os.environ.get("USE_VLLM", "1") == "1"
 
-# When CUDA_VISIBLE_DEVICES is not set, default to using GPU 0 (policy) and
-# GPU 1 (RM) on the local machine. Override by exporting CUDA_VISIBLE_DEVICES
-# upstream — REWARD_GPU is then an index into the *visible* devices.
 if "CUDA_VISIBLE_DEVICES" not in os.environ:
-    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get(
-        "DEFAULT_VISIBLE", "0,1"
-    )
+    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("DEFAULT_VISIBLE", "0")
 
 LORA_RANK = int(os.environ.get("LORA_RANK", "32"))
 LORA_ALPHA = int(os.environ.get("LORA_ALPHA", "32"))
@@ -142,16 +139,16 @@ def _sigmoid(x: float) -> float:
     return z / (1.0 + z)
 
 
-def humor_reward(completions, image_path, prompt_text, **kwargs) -> list[float | None]:
-    """Bradley-Terry reward in [0, 1]: sigmoid(RM_score(caption | image, prompt)).
+def humor_reward(completions, image_path, prompt_text, **kwargs) -> list[float]:
+    """Single combined reward in [0, 1]:
+        - 0.0 if no <caption>...</caption> block (encodes the format scaffold)
+        - sigmoid(RM_score(caption | image, prompt)) otherwise
 
-    Returns None for completions without a <caption> tag; TRL converts those
-    to NaN and `nansum` skips them when aggregating with the format reward.
-    Net effect: missing-caption completions are scored only by the format
-    reward (= 0), captioned completions get format=1 plus humor.
-
-    Raw RM scores can be very negative; sigmoid keeps the humor reward in
-    [0, 1] so a bad caption is always at least as good as no caption.
+    This replaces the earlier (format_reward, humor_reward) pair. The format
+    reward was a scaffold the policy maxed out within ~50 steps and then
+    contributed zero gradient; folding the format check into "no caption -> 0"
+    keeps the reward in [0, 1] (friendly to GRPO's group-relative advantage
+    normalization) and still teaches the format via the implicit floor.
 
     `image_path` and `prompt_text` are forwarded by TRL from the dataset
     columns of the same name (each list is aligned with `completions`).
@@ -179,7 +176,11 @@ def humor_reward(completions, image_path, prompt_text, **kwargs) -> list[float |
         captions.append(caption)
         keep_indices.append(i)
 
-    rewards: list[float | None] = [None] * len(completions)
+    # Default to 0.0 (the missing-caption case): GRPO sees a floor reward, so
+    # the baseline subtraction inside the group keeps the format scaffold
+    # learnable without polluting the [0, 1] dynamic range with format=1
+    # bonuses on top of every captioned completion.
+    rewards: list[float] = [0.0] * len(completions)
     if images:
         scores = score_batch(_RM, images, prompts, captions)
         for idx, s in zip(keep_indices, scores):
@@ -300,22 +301,25 @@ def main() -> int:
         # Default is True, which would drop everything outside ["prompt","image","images"].
         remove_unused_columns=False,
         model_init_kwargs={"dtype": "bfloat16"},
-        # Optimizer / schedule. LoRA RL benefits from ~10x typical FullFT LR
-        # (thinkingmachines.ai/blog/lora).
-        learning_rate=5e-5,
-        weight_decay=0.001,
+        # Optimizer / schedule — match the RM training recipe.
+        # LoRA RL benefits from ~10x typical FullFT LR (thinkingmachines.ai/blog/lora).
+        learning_rate=float(os.environ.get("LR", "2e-4")),
+        weight_decay=0.0,
         lr_scheduler_type="constant",
+        warmup_ratio=0.0,
+        max_grad_norm=1.0,
         optim="adamw_8bit",
         bf16=True,
         gradient_checkpointing=True,
-        # GRPO knobs.
+        # GRPO knobs. eff_prompts_per_step = per_device * accum = 8.
+        # num_generations=8 → 64 rollouts per optimizer step.
         temperature=1.0,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
-        num_generations=4,
+        per_device_train_batch_size=int(os.environ.get("PER_DEVICE_BATCH", "1")),
+        gradient_accumulation_steps=int(os.environ.get("GRAD_ACCUM", "8")),
+        num_generations=int(os.environ.get("NUM_GENERATIONS", "8")),
         max_completion_length=MAX_COMPLETION_LENGTH,
         max_steps=int(os.environ.get("MAX_STEPS", "500")),
-        save_steps=200,
+        save_steps=int(os.environ.get("SAVE_STEPS", "100")),
         logging_steps=1,
         # KL stays modest — Qwen3-VL-Thinking produces structured think/answer
         # blocks already, so we don't want to drift far from that prior.
@@ -325,16 +329,14 @@ def main() -> int:
         delta=1.5,
         loss_type="cispo",
         mask_truncated_completions=True,
-        # Reward weights: format is a strong scaffold (it fully covers the
-        # no-caption case via NaN propagation in nansum); humor is the actual
-        # signal in [0, 1]. The two are roughly comparable in magnitude so
-        # a small humor bump can outweigh formatting noise once the policy
-        # reliably emits tags.
-        reward_weights=[1.0, 1.0],
+        # Single combined reward (humor_reward); see its docstring.
+        # No reward_weights needed when there's a single reward function.
         # Rollouts via vLLM colocate on the trainer's GPU.
+        # When the RM lives on the same GPU (single-A100 setup), drop this to
+        # ~0.30 to leave room for the RM's weights+activations.
         use_vllm=USE_VLLM,
         vllm_mode="colocate",
-        vllm_gpu_memory_utilization=0.4,
+        vllm_gpu_memory_utilization=float(os.environ.get("VLLM_MEM", "0.30")),
         vllm_max_model_length=MAX_MODEL_LENGTH,
         # Logging.
         report_to="wandb",
@@ -346,7 +348,7 @@ def main() -> int:
 
     trainer = GRPOTrainer(
         model=POLICY_MODEL_NAME,
-        reward_funcs=[format_reward, humor_reward],
+        reward_funcs=humor_reward,
         args=training_args,
         train_dataset=train_dataset,
         peft_config=lora_config,
