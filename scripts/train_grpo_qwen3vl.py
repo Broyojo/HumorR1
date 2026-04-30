@@ -306,7 +306,10 @@ def main() -> int:
         # Preserve `image_path` / `prompt_text` columns so the reward fn sees them.
         # Default is True, which would drop everything outside ["prompt","image","images"].
         remove_unused_columns=False,
-        model_init_kwargs={"dtype": "bfloat16"},
+        model_init_kwargs={
+            "dtype": "bfloat16",
+            "attn_implementation": "flash_attention_2",
+        },
         # Optimizer / schedule — match the RM training recipe.
         # LoRA RL benefits from ~10x typical FullFT LR (thinkingmachines.ai/blog/lora).
         learning_rate=float(os.environ.get("LR", "2e-4")),
