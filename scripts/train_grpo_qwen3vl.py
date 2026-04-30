@@ -176,15 +176,21 @@ def humor_reward(completions, image_path, prompt_text, **kwargs) -> list[float]:
         captions.append(caption)
         keep_indices.append(i)
 
-    # Default to 0.0 (the missing-caption case): GRPO sees a floor reward, so
-    # the baseline subtraction inside the group keeps the format scaffold
-    # learnable without polluting the [0, 1] dynamic range with format=1
-    # bonuses on top of every captioned completion.
+    # Reward shaping (env-tunable):
+    #   - no caption:  reward = 0.0
+    #   - has caption: reward = FORMAT_BONUS + (1 - FORMAT_BONUS) * sigmoid(RM)
+    #
+    # FORMAT_BONUS=0.0 reproduces the original "just sigmoid(RM)" reward.
+    # FORMAT_BONUS≈0.3 keeps the [0, 1] range but increases the gap between
+    # captioned/uncaptioned generations, which helps GRPO when most groups
+    # have only 1-2 captioned completions out of 8 (small within-group
+    # variance otherwise produces tiny advantages).
+    format_bonus = float(os.environ.get("FORMAT_BONUS", "0.0"))
     rewards: list[float] = [0.0] * len(completions)
     if images:
         scores = score_batch(_RM, images, prompts, captions)
         for idx, s in zip(keep_indices, scores):
-            rewards[idx] = _sigmoid(float(s))
+            rewards[idx] = format_bonus + (1.0 - format_bonus) * _sigmoid(float(s))
     return rewards
 
 
