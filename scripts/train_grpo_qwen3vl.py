@@ -177,20 +177,31 @@ def humor_reward(completions, image_path, prompt_text, **kwargs) -> list[float]:
         keep_indices.append(i)
 
     # Reward shaping (env-tunable):
-    #   - no caption:  reward = 0.0
-    #   - has caption: reward = FORMAT_BONUS + (1 - FORMAT_BONUS) * sigmoid(RM)
+    #   USE_SIGMOID=1 (default):
+    #     - no caption:  reward = 0.0
+    #     - has caption: reward = FORMAT_BONUS + (1-FORMAT_BONUS) * sigmoid(RM)
+    #   USE_SIGMOID=0:
+    #     - no caption:  reward = NO_CAPTION_PENALTY (default -5.0)
+    #     - has caption: reward = raw RM_score
     #
-    # FORMAT_BONUS=0.0 reproduces the original "just sigmoid(RM)" reward.
-    # FORMAT_BONUS≈0.3 keeps the [0, 1] range but increases the gap between
-    # captioned/uncaptioned generations, which helps GRPO when most groups
-    # have only 1-2 captioned completions out of 8 (small within-group
-    # variance otherwise produces tiny advantages).
+    # We default to sigmoid for stability, but raw RM gives ~20× larger
+    # within-group reward variance, so the GRPO advantages are non-trivial
+    # even when the policy is producing similar-quality captions across the
+    # group. Use raw RM when training reward stalls under sigmoid.
+    use_sigmoid = os.environ.get("USE_SIGMOID", "1") == "1"
     format_bonus = float(os.environ.get("FORMAT_BONUS", "0.0"))
-    rewards: list[float] = [0.0] * len(completions)
+    no_cap_penalty = float(os.environ.get("NO_CAPTION_PENALTY", "-5.0"))
+    if use_sigmoid:
+        rewards: list[float] = [0.0] * len(completions)
+    else:
+        rewards = [no_cap_penalty] * len(completions)
     if images:
         scores = score_batch(_RM, images, prompts, captions)
         for idx, s in zip(keep_indices, scores):
-            rewards[idx] = format_bonus + (1.0 - format_bonus) * _sigmoid(float(s))
+            if use_sigmoid:
+                rewards[idx] = format_bonus + (1.0 - format_bonus) * _sigmoid(float(s))
+            else:
+                rewards[idx] = float(s)
     return rewards
 
 
