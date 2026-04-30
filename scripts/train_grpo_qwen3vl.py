@@ -328,7 +328,10 @@ def main() -> int:
         epsilon_high=0.28,
         delta=1.5,
         loss_type="cispo",
-        mask_truncated_completions=True,
+        # We end completions via the </caption> stop string (vLLM SamplingParams.stop)
+        # so they don't emit EOS and TRL flags them all as "truncated". Disable
+        # the mask so we keep the gradient signal from those completions.
+        mask_truncated_completions=False,
         # Single combined reward (humor_reward); see its docstring.
         # No reward_weights needed when there's a single reward function.
         # Stop generation as soon as the closing </caption> tag is emitted —
