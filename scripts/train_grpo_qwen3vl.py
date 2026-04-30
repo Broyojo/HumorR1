@@ -196,7 +196,17 @@ def humor_reward(completions, image_path, prompt_text, **kwargs) -> list[float]:
     else:
         rewards = [no_cap_penalty] * len(completions)
     if images:
-        scores = score_batch(_RM, images, prompts, captions)
+        chunk = int(os.environ.get("SCORE_BATCH", "4"))
+        scores: list[float] = []
+        for i in range(0, len(images), chunk):
+            scores.extend(
+                score_batch(
+                    _RM,
+                    images[i : i + chunk],
+                    prompts[i : i + chunk],
+                    captions[i : i + chunk],
+                )
+            )
         for idx, s in zip(keep_indices, scores):
             if use_sigmoid:
                 rewards[idx] = format_bonus + (1.0 - format_bonus) * _sigmoid(float(s))
