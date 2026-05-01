@@ -16,3 +16,7 @@ wandb
 logs/
 checkpoints/
 *.log
+
+# Local secrets
+.env
+.env.*
