@@ -117,7 +117,9 @@ def call_openrouter(judge: str, messages: list, max_tokens: int,
     raise RuntimeError(f"openrouter failed: {last_exc}")
 
 
-def parse_winner(text: str) -> str | None:
+def parse_winner(text: str | None) -> str | None:
+    if not text:
+        return None
     m = WINNER_RE.search(text)
     if m:
         return m.group(1).upper()
@@ -143,7 +145,10 @@ def judge_pair(judge: str, image_b64: str, caption_a: str, caption_b: str,
             }},
         ]},
     ]
-    text = call_openrouter(judge, messages, max_tokens)
+    try:
+        text = call_openrouter(judge, messages, max_tokens)
+    except Exception:
+        return None
     return parse_winner(text)
 
 
