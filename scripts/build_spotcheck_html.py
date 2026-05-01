@@ -30,7 +30,7 @@ from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CELLS = ["E0a", "E0b", "E0c", "E1a", "E1b", "E2a", "E2b"]
+CELLS = ["E0a", "E0b", "E0c", "E1a", "E1b", "E2a", "E2b", "E3"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -138,15 +138,16 @@ textarea { width: 100%; height: 200px; font-family: monospace; }
 </div>
 """]
     for idx, item in enumerate(items):
+        n_caps = len(item["candidates"])
         html_parts.append(f"""
-<div class="cartoon" data-contest="{item['contest_number']}" data-idx="{idx}">
+<div class="cartoon" data-contest="{item['contest_number']}" data-idx="{idx}" data-n="{n_caps}">
 <h3>Cartoon #{idx+1} (contest {item['contest_number']})</h3>
 <img src="data:image/jpeg;base64,{item['image_b64']}" />
-<p>Rank these captions 1–7:</p>
+<p>Rank these captions 1–{n_caps} (1 = funniest):</p>
 """)
         for p in item["candidates"]:
             html_parts.append(f"""
-<div class="cap"><input type="number" min="1" max="7" data-cell="{p['cell']}" data-display="{p['display_id']}" /> <b>{p['display_id']}.</b> {p['caption']}</div>
+<div class="cap"><input type="number" min="1" max="{n_caps}" data-cell="{p['cell']}" data-display="{p['display_id']}" /> <b>{p['display_id']}.</b> {p['caption']}</div>
 """)
         html_parts.append("</div>")
 
@@ -163,11 +164,12 @@ function compute() {
     let issues = [];
     for (const cart of cartoons) {
         const contest = cart.dataset.contest;
+        const nCaps = parseInt(cart.dataset.n);
         const ranks = {};
         const seen = {};
         for (const inp of cart.querySelectorAll('input[data-cell]')) {
             const r = parseInt(inp.value);
-            if (!r || r < 1 || r > 7) {
+            if (!r || r < 1 || r > nCaps) {
                 issues.push(`Cartoon ${contest}: missing or invalid rank for ${inp.dataset.display}`);
             }
             if (seen[r]) {

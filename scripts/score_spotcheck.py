@@ -23,7 +23,7 @@ from scipy.stats import spearmanr  # type: ignore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CELLS = ["E0a", "E0b", "E0c", "E1a", "E1b", "E2a", "E2b"]
+CELLS = ["E0a", "E0b", "E0c", "E1a", "E1b", "E2a", "E2b", "E3"]
 
 
 def krippendorff_alpha_ordinal(matrix: np.ndarray) -> float:
