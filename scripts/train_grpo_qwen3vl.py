@@ -60,7 +60,7 @@ TRAIN_DATA_DIR = DATA_ROOT / "caption_sft_train"
 CKPT_ROOT = Path(
     os.environ.get("CKPT_ROOT", str(PROJECT_ROOT / "checkpoints"))
 )
-OUTPUT_DIR = CKPT_ROOT / "qwen3vl-2b-grpo-newyorker"
+OUTPUT_DIR = Path(os.environ.get("OUTPUT_DIR", str(CKPT_ROOT / "qwen3vl-2b-grpo-newyorker")))
 
 # Single-A100 setup: RM colocates with the policy on GPU 0. Override
 # REWARD_GPU=1 if you have a second card.
