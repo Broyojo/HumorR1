@@ -18,7 +18,7 @@ from pathlib import Path
 import statistics
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CELLS = ["E0a", "E0b", "E0c", "E1a", "E1b", "E2a", "E2b"]
+CELLS = ["E0a", "E0b", "E0c", "E1a", "E1b", "E2a", "E2b", "E3"]
 
 
 def load_scored(cell: str, split: str) -> dict[int, list[float]]:
